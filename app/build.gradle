@@ -6,6 +6,13 @@ plugins {
     id 'kotlin-parcelize'
 }
 
+// Load API keys from secure file (never committed to Git)
+def apiKeyPropertiesFile = rootProject.file("api_key.properties")
+def apiKeyProperties = new Properties()
+if (apiKeyPropertiesFile.exists()) {
+    apiKeyProperties.load(new FileInputStream(apiKeyPropertiesFile))
+}
+
 android {
     namespace 'com.popla.perplexitydemo'
     compileSdk 34
@@ -19,10 +26,10 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         
-        // Build config fields for API configuration - Using OpenRouter
-        buildConfigField "String", "AGENT_API_BASE", "\"https://openrouter.ai/api/v1/\""
-        buildConfigField "String", "AGENT_API_KEY", "\"YOUR_API_KEY_HERE\""
-        buildConfigField "boolean", "USE_BRAVE_CHROMIUM", "false"
+        // Build config fields for API configuration - Loaded from secure file
+        buildConfigField "String", "AGENT_API_BASE", "\"${apiKeyProperties.getProperty('AGENT_API_BASE', 'https://openrouter.ai/api/v1/')}\""
+        buildConfigField "String", "AGENT_API_KEY", "\"${apiKeyProperties.getProperty('AGENT_API_KEY', 'YOUR_API_KEY_HERE')}\""
+        buildConfigField "boolean", "USE_BRAVE_CHROMIUM", "${apiKeyProperties.getProperty('USE_BRAVE_CHROMIUM', 'false')}"
         
         // DEX optimization for faster builds
         multiDexEnabled true

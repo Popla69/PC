@@ -1,0 +1,14 @@
+# API Key Configuration Template
+# Copy this file to 'api_key.properties' and add your actual API keys
+# NEVER commit the actual api_key.properties file to Git!
+
+# OpenRouter API Configuration
+AGENT_API_BASE=https://openrouter.ai/api/v1/
+AGENT_API_KEY=YOUR_API_KEY_HERE
+USE_BRAVE_CHROMIUM=false
+
+# Instructions:
+# 1. Copy this file: cp api_key.properties.template api_key.properties
+# 2. Edit api_key.properties and replace YOUR_API_KEY_HERE with your actual API key
+# 3. Get your API key from: https://openrouter.ai/
+# 4. The api_key.properties file will be automatically ignored by Git

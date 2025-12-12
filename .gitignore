@@ -40,6 +40,12 @@ gradle/wrapper/gradle-wrapper.jar
 # Local configuration files
 local.properties
 
+# API Keys and Secrets - NEVER COMMIT THESE!
+api_key.properties
+*.key
+*_key.properties
+secrets.properties
+
 # Log files
 *.log
 
