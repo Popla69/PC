@@ -21,7 +21,7 @@ android {
         
         // Build config fields for API configuration - Using OpenRouter
         buildConfigField "String", "AGENT_API_BASE", "\"https://openrouter.ai/api/v1/\""
-        buildConfigField "String", "AGENT_API_KEY", "\"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\""
+        buildConfigField "String", "AGENT_API_KEY", "\"YOUR_API_KEY_HERE\""
         buildConfigField "boolean", "USE_BRAVE_CHROMIUM", "false"
         
         // DEX optimization for faster builds
