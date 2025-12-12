@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/nav_chat">
+
+    <fragment
+        android:id="@+id/nav_chat"
+        android:name="com.popla.perplexitydemo.presentation.chat.ChatFragment"
+        android:label="Chat" />
+
+    <fragment
+        android:id="@+id/nav_browser"
+        android:name="com.popla.perplexitydemo.presentation.browser.BrowserFragment"
+        android:label="Browser" />
+
+    <fragment
+        android:id="@+id/nav_upload"
+        android:name="com.popla.perplexitydemo.presentation.upload.UploadFragment"
+        android:label="Upload" />
+
+    <fragment
+        android:id="@+id/nav_settings"
+        android:name="com.popla.perplexitydemo.presentation.settings.SettingsFragment"
+        android:label="Settings" />
+
+</navigation>

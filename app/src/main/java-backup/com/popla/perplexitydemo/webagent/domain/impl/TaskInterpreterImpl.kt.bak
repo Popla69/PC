@@ -1,0 +1,901 @@
+package com.popla.perplexitydemo.webagent.domain.impl
+
+import com.popla.perplexitydemo.webagent.data.model.*
+import com.popla.perplexitydemo.webagent.domain.TaskInterpreter
+import com.popla.perplexitydemo.webagent.data.model.WebContext
+import java.util.*
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Implementation of TaskInterpreter for converting task intents into executable plans
+ */
+@Singleton
+class TaskInterpreterImpl @Inject constructor() : TaskInterpreter {
+    
+    override suspend fun interpretTask(intent: TaskIntent, context: WebContext): TaskPlan {
+        val steps = when (intent.action) {
+            ActionType.FILL_FORM -> createFormFillingPlan(intent, context)
+            ActionType.NAVIGATE -> createNavigationPlan(intent, context)
+            ActionType.CLICK -> createClickPlan(intent, context)
+            ActionType.SEARCH -> createSearchPlan(intent, context)
+            ActionType.MONITOR -> createMonitoringPlan(intent, context)
+            ActionType.EXTRACT_DATA -> createExtractionPlan(intent, context)
+            ActionType.SHOP -> createShoppingPlan(intent, context)
+            ActionType.BOOK_APPOINTMENT -> createBookingPlan(intent, context)
+            ActionType.SOCIAL_MEDIA_POST -> createSocialMediaPlan(intent, context)
+            ActionType.UNKNOWN -> createFallbackPlan(intent, context)
+        }
+        
+        val conditions = generateConditions(intent, context)
+        val fallbacks = generateFallbacks(intent, context, steps)
+        val estimatedDuration = calculateEstimatedDuration(steps)
+        
+        return TaskPlan(
+            id = UUID.randomUUID().toString(),
+            steps = steps,
+            conditions = conditions,
+            fallbacks = fallbacks,
+            estimatedDuration = estimatedDuration
+        )
+    }
+    
+    override suspend fun validatePlan(plan: TaskPlan): ValidationResult {
+        val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
+        
+        // Basic validation
+        if (plan.id.isEmpty()) {
+            errors.add("Task plan must have a valid ID")
+        }
+        
+        if (plan.steps.isEmpty()) {
+            errors.add("Task plan must contain at least one step")
+        }
+        
+        if (plan.estimatedDuration <= 0) {
+            errors.add("Estimated duration must be positive")
+        }
+        
+        // Step validation
+        val stepIds = mutableSetOf<String>()
+        val orders = mutableSetOf<Int>()
+        
+        plan.steps.forEach { step ->
+            // Check for duplicate IDs
+            if (step.id in stepIds) {
+                errors.add("Duplicate step ID: ${step.id}")
+            }
+            stepIds.add(step.id)
+            
+            // Check for duplicate orders
+            if (step.order in orders) {
+                errors.add("Duplicate step order: ${step.order}")
+            }
+            orders.add(step.order)
+            
+            // Validate step properties
+            if (step.id.isEmpty()) {
+                errors.add("Step must have a valid ID")
+            }
+            
+            if (step.order < 0) {
+                errors.add("Step order cannot be negative")
+            }
+            
+            if (step.timeout <= 0) {
+                errors.add("Step timeout must be positive")
+            }
+            
+            if (step.retryCount < 0) {
+                errors.add("Step retry count cannot be negative")
+            }
+            
+            // Validate dependencies
+            step.dependencies.forEach { depId ->
+                if (depId !in stepIds && depId != step.id) {
+                    // Check if dependency exists in earlier steps
+                    val dependencyExists = plan.steps.any { it.id == depId && it.order < step.order }
+                    if (!dependencyExists) {
+                        errors.add("Step ${step.id} has invalid dependency: $depId")
+                    }
+                }
+            }
+            
+            // Validate action
+            validateAction(step.action, errors, warnings)
+        }
+        
+        // Check for circular dependencies
+        if (hasCircularDependencies(plan.steps)) {
+            errors.add("Task plan contains circular dependencies")
+        }
+        
+        // Performance warnings
+        if (plan.steps.size > 20) {
+            warnings.add("Task plan has many steps (${plan.steps.size}), consider breaking it down")
+        }
+        
+        if (plan.estimatedDuration > 300000) { // 5 minutes
+            warnings.add("Task plan has long estimated duration (${plan.estimatedDuration}ms)")
+        }
+        
+        // Calculate success rate
+        val successRate = calculateSuccessRate(plan, errors, warnings)
+        
+        return ValidationResult(
+            isValid = errors.isEmpty(),
+            errors = errors,
+            warnings = warnings,
+            estimatedSuccessRate = successRate
+        )
+    }
+    
+    override suspend fun adaptPlan(plan: TaskPlan, newContext: WebContext): TaskPlan {
+        val adaptedSteps = plan.steps.map { step ->
+            adaptStep(step, newContext)
+        }
+        
+        // Re-validate conditions with new context
+        val adaptedConditions = plan.conditions.filter { condition ->
+            isConditionRelevant(condition, newContext)
+        }
+        
+        // Update fallbacks if needed
+        val adaptedFallbacks = plan.fallbacks.map { fallback ->
+            fallback.copy(
+                alternativeAction = adaptAction(fallback.alternativeAction, newContext)
+            )
+        }
+        
+        return plan.copy(
+            id = UUID.randomUUID().toString(), // New ID for adapted plan
+            steps = adaptedSteps,
+            conditions = adaptedConditions,
+            fallbacks = adaptedFallbacks,
+            estimatedDuration = calculateEstimatedDuration(adaptedSteps)
+        )
+    }
+    
+    override suspend fun estimateSuccess(plan: TaskPlan, context: WebContext): Float {
+        var baseSuccess = 1.0f
+        
+        // Reduce success based on plan complexity
+        baseSuccess -= (plan.steps.size * 0.02f).coerceAtMost(0.3f)
+        
+        // Check if required elements are available
+        plan.steps.forEach { step ->
+            when (val action = step.action) {
+                is WebAction.Click -> {
+                    val elementAvailable = context.availableActions.any { 
+                        it.selector == action.selector && it.type == ActionType.CLICK 
+                    }
+                    if (!elementAvailable) baseSuccess -= 0.15f
+                }
+                is WebAction.Type -> {
+                    val fieldAvailable = context.formFields.any { it.selector == action.selector }
+                    if (!fieldAvailable) baseSuccess -= 0.15f
+                }
+                is WebAction.Navigate -> {
+                    // Navigation is generally reliable
+                    baseSuccess -= 0.05f
+                }
+                is WebAction.Select -> {
+                    val selectAvailable = context.formFields.any { 
+                        it.selector == action.selector && it.type == FormFieldType.SELECT 
+                    }
+                    if (!selectAvailable) baseSuccess -= 0.1f
+                }
+                else -> {
+                    // Other actions have moderate reliability
+                    baseSuccess -= 0.08f
+                }
+            }
+        }
+        
+        // Boost success if context is well-suited
+        if (context.formFields.isNotEmpty() && plan.steps.any { it.action is WebAction.Type }) {
+            baseSuccess += 0.1f
+        }
+        
+        if (context.availableActions.isNotEmpty() && plan.steps.any { it.action is WebAction.Click }) {
+            baseSuccess += 0.1f
+        }
+        
+        return baseSuccess.coerceIn(0.0f, 1.0f)
+    }
+    
+    override suspend fun generateAlternatives(intent: TaskIntent, context: WebContext): List<TaskPlan> {
+        val alternatives = mutableListOf<TaskPlan>()
+        
+        // Only generate alternatives if there's ambiguity or low confidence
+        if (intent.confidence > 0.9f && intent.ambiguities.isEmpty()) {
+            return alternatives
+        }
+        
+        when (intent.action) {
+            ActionType.FILL_FORM -> {
+                // Alternative 1: Manual field-by-field approach
+                alternatives.add(createManualFormFillingPlan(intent, context))
+                
+                // Alternative 2: Auto-detect and fill approach
+                alternatives.add(createAutoDetectFormPlan(intent, context))
+            }
+            
+            ActionType.NAVIGATE -> {
+                // Alternative 1: Direct navigation
+                alternatives.add(createDirectNavigationPlan(intent, context))
+                
+                // Alternative 2: Search-based navigation
+                if (intent.target == null) {
+                    alternatives.add(createSearchNavigationPlan(intent, context))
+                }
+            }
+            
+            ActionType.SHOP -> {
+                // Alternative 1: Price comparison approach
+                alternatives.add(createPriceComparisonPlan(intent, context))
+                
+                // Alternative 2: Quick purchase approach
+                alternatives.add(createQuickPurchasePlan(intent, context))
+            }
+            
+            else -> {
+                // Generate a conservative alternative for other actions
+                alternatives.add(createConservativeAlternative(intent, context))
+            }
+        }
+        
+        return alternatives
+    }
+    
+    // Private helper methods
+    
+    private fun createFormFillingPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        val steps = mutableListOf<ActionStep>()
+        var order = 0
+        
+        // Wait for form to be ready
+        steps.add(ActionStep(
+            id = UUID.randomUUID().toString(),
+            action = WebAction.Wait(Condition(ConditionType.ELEMENT_EXISTS, "form", null)),
+            order = order++,
+            dependencies = emptyList(),
+            timeout = 10000L
+        ))
+        
+        // Fill each form field
+        context.formFields.forEach { field ->
+            if (field.suggestedUserData != null) {
+                val action = when (field.type) {
+                    FormFieldType.SELECT -> WebAction.Select(field.selector, field.suggestedUserData)
+                    FormFieldType.CHECKBOX -> WebAction.Click(field.selector)
+                    FormFieldType.FILE -> WebAction.Upload(field.selector, field.suggestedUserData, "file")
+                    else -> WebAction.Type(field.selector, field.suggestedUserData)
+                }
+                
+                steps.add(ActionStep(
+                    id = UUID.randomUUID().toString(),
+                    action = action,
+                    order = order++,
+                    dependencies = if (steps.isNotEmpty()) listOf(steps.last().id) else emptyList(),
+                    timeout = 5000L
+                ))
+            }
+        }
+        
+        // Submit form if submit button is available
+        val submitAction = context.availableActions.find { 
+            it.description.contains("submit", ignoreCase = true) ||
+            it.description.contains("send", ignoreCase = true) ||
+            it.selector.contains("submit", ignoreCase = true)
+        }
+        
+        if (submitAction != null) {
+            steps.add(ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Click(submitAction.selector),
+                order = order++,
+                dependencies = if (steps.isNotEmpty()) listOf(steps.last().id) else emptyList(),
+                timeout = 10000L
+            ))
+        }
+        
+        return steps.ifEmpty { 
+            listOf(ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Wait(Condition(ConditionType.PAGE_LOADED, null, null)),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 5000L
+            ))
+        }
+    }
+    
+    private fun createNavigationPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        val targetUrl = intent.target ?: intent.parameters["url"] ?: "https://google.com"
+        
+        return listOf(ActionStep(
+            id = UUID.randomUUID().toString(),
+            action = WebAction.Navigate(targetUrl),
+            order = 0,
+            dependencies = emptyList(),
+            timeout = 15000L,
+            retryCount = 2
+        ))
+    }
+    
+    private fun createClickPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        val targetSelector = intent.parameters["selector"] ?: 
+            context.availableActions.firstOrNull { it.type == ActionType.CLICK }?.selector ?: 
+            "button"
+        
+        return listOf(
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Wait(Condition(ConditionType.ELEMENT_CLICKABLE, targetSelector, null)),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 10000L
+            ),
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Click(targetSelector),
+                order = 1,
+                dependencies = emptyList(),
+                timeout = 5000L,
+                retryCount = 3
+            )
+        )
+    }
+    
+    private fun createSearchPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        val searchQuery = intent.parameters["query"] ?: "search"
+        val searchSelector = intent.parameters["search_field"] ?: "input[type='search'], #search, .search-input"
+        
+        return listOf(
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Type(searchSelector, searchQuery),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 5000L
+            ),
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Click("button[type='submit'], .search-button, #search-btn"),
+                order = 1,
+                dependencies = emptyList(),
+                timeout = 5000L
+            )
+        )
+    }
+    
+    private fun createMonitoringPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        val trackType = intent.parameters["track_type"] ?: "content"
+        val selectors = when (trackType) {
+            "price" -> mapOf("price" to ".price, .cost, .amount")
+            "availability" -> mapOf("stock" to ".stock, .availability, .in-stock")
+            else -> mapOf("content" to "body")
+        }
+        
+        return listOf(ActionStep(
+            id = UUID.randomUUID().toString(),
+            action = WebAction.ExtractData(selectors),
+            order = 0,
+            dependencies = emptyList(),
+            timeout = 10000L
+        ))
+    }
+    
+    private fun createExtractionPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        val extractionType = intent.parameters["type"] ?: "general"
+        val selectors = when (extractionType) {
+            "contact" -> mapOf(
+                "email" to "a[href*='mailto:'], .email",
+                "phone" to ".phone, .tel, a[href*='tel:']",
+                "address" to ".address, .location"
+            )
+            "product" -> mapOf(
+                "name" to ".product-name, h1",
+                "price" to ".price, .cost",
+                "description" to ".description, .details"
+            )
+            else -> mapOf("content" to "main, .content, body")
+        }
+        
+        return listOf(ActionStep(
+            id = UUID.randomUUID().toString(),
+            action = WebAction.ExtractData(selectors),
+            order = 0,
+            dependencies = emptyList(),
+            timeout = 15000L
+        ))
+    }
+    
+    private fun createShoppingPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        val steps = mutableListOf<ActionStep>()
+        var order = 0
+        
+        // Search for product
+        val product = intent.parameters["product"] ?: "product"
+        steps.add(ActionStep(
+            id = UUID.randomUUID().toString(),
+            action = WebAction.Type("#search, .search-input", product),
+            order = order++,
+            dependencies = emptyList(),
+            timeout = 5000L
+        ))
+        
+        steps.add(ActionStep(
+            id = UUID.randomUUID().toString(),
+            action = WebAction.Click(".search-button, button[type='submit']"),
+            order = order++,
+            dependencies = listOf(steps.last().id),
+            timeout = 5000L
+        ))
+        
+        // Add to cart
+        steps.add(ActionStep(
+            id = UUID.randomUUID().toString(),
+            action = WebAction.Click(".add-to-cart, .buy-now"),
+            order = order++,
+            dependencies = listOf(steps.last().id),
+            timeout = 10000L
+        ))
+        
+        return steps
+    }
+    
+    private fun createBookingPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        val steps = mutableListOf<ActionStep>()
+        var order = 0
+        
+        // Select date if available
+        val dateField = context.formFields.find { it.type == FormFieldType.DATE }
+        if (dateField != null) {
+            steps.add(ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Type(dateField.selector, intent.parameters["date"] ?: "2024-12-25"),
+                order = order++,
+                dependencies = emptyList(),
+                timeout = 5000L
+            ))
+        }
+        
+        // Select time if available
+        val timeField = context.formFields.find { it.type == FormFieldType.TIME }
+        if (timeField != null) {
+            steps.add(ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Type(timeField.selector, intent.parameters["time"] ?: "10:00"),
+                order = order++,
+                dependencies = if (steps.isNotEmpty()) listOf(steps.last().id) else emptyList(),
+                timeout = 5000L
+            ))
+        }
+        
+        // Submit booking
+        steps.add(ActionStep(
+            id = UUID.randomUUID().toString(),
+            action = WebAction.Click(".book-now, .submit, button[type='submit']"),
+            order = order++,
+            dependencies = if (steps.isNotEmpty()) listOf(steps.last().id) else emptyList(),
+            timeout = 10000L
+        ))
+        
+        return steps
+    }
+    
+    private fun createSocialMediaPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        val content = intent.parameters["content"] ?: "Hello, world!"
+        
+        return listOf(
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Type(".post-input, textarea, #post-content", content),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 5000L
+            ),
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Click(".post-button, .share-button, button[type='submit']"),
+                order = 1,
+                dependencies = emptyList(),
+                timeout = 10000L
+            )
+        )
+    }
+    
+    private fun createFallbackPlan(intent: TaskIntent, context: WebContext): List<ActionStep> {
+        return listOf(ActionStep(
+            id = UUID.randomUUID().toString(),
+            action = WebAction.Wait(Condition(ConditionType.PAGE_LOADED, null, null)),
+            order = 0,
+            dependencies = emptyList(),
+            timeout = 5000L
+        ))
+    }
+    
+    private fun generateConditions(intent: TaskIntent, context: WebContext): List<Condition> {
+        val conditions = mutableListOf<Condition>()
+        
+        when (intent.action) {
+            ActionType.FILL_FORM -> {
+                conditions.add(Condition(ConditionType.ELEMENT_EXISTS, "form", null))
+            }
+            ActionType.NAVIGATE -> {
+                conditions.add(Condition(ConditionType.PAGE_LOADED, null, null))
+            }
+            ActionType.CLICK -> {
+                val selector = intent.parameters["selector"] ?: "button"
+                conditions.add(Condition(ConditionType.ELEMENT_CLICKABLE, selector, null))
+            }
+            else -> {
+                conditions.add(Condition(ConditionType.PAGE_LOADED, null, null))
+            }
+        }
+        
+        return conditions
+    }
+    
+    private fun generateFallbacks(intent: TaskIntent, context: WebContext, steps: List<ActionStep>): List<FallbackAction> {
+        val fallbacks = mutableListOf<FallbackAction>()
+        
+        // Add fallback for form filling
+        if (intent.action == ActionType.FILL_FORM) {
+            fallbacks.add(FallbackAction(
+                triggerCondition = "form_not_found",
+                alternativeAction = WebAction.Wait(Condition(ConditionType.ELEMENT_EXISTS, "input", null)),
+                maxAttempts = 2
+            ))
+        }
+        
+        // Add fallback for navigation
+        if (intent.action == ActionType.NAVIGATE) {
+            fallbacks.add(FallbackAction(
+                triggerCondition = "navigation_failed",
+                alternativeAction = WebAction.ExecuteScript("window.location.reload()"),
+                maxAttempts = 1
+            ))
+        }
+        
+        return fallbacks
+    }
+    
+    private fun calculateEstimatedDuration(steps: List<ActionStep>): Long {
+        return steps.sumOf { step ->
+            when (step.action) {
+                is WebAction.Navigate -> 10000L // Navigation takes longer
+                is WebAction.Upload -> 15000L // File uploads take time
+                is WebAction.Wait -> step.timeout
+                else -> 3000L // Default action time
+            }
+        }
+    }
+    
+    private fun validateAction(action: WebAction, errors: MutableList<String>, warnings: MutableList<String>) {
+        when (action) {
+            is WebAction.Click -> {
+                if (action.selector.isEmpty()) {
+                    errors.add("Click action must have a valid selector")
+                }
+            }
+            is WebAction.Type -> {
+                if (action.selector.isEmpty()) {
+                    errors.add("Type action must have a valid selector")
+                }
+                if (action.text.isEmpty()) {
+                    warnings.add("Type action has empty text")
+                }
+            }
+            is WebAction.Navigate -> {
+                if (action.url.isEmpty()) {
+                    errors.add("Navigate action must have a valid URL")
+                }
+                if (!action.url.startsWith("http")) {
+                    warnings.add("Navigate URL should use HTTP/HTTPS protocol")
+                }
+            }
+            is WebAction.Select -> {
+                if (action.selector.isEmpty()) {
+                    errors.add("Select action must have a valid selector")
+                }
+                if (action.option.isEmpty()) {
+                    errors.add("Select action must have a valid option")
+                }
+            }
+            is WebAction.Upload -> {
+                if (action.selector.isEmpty()) {
+                    errors.add("Upload action must have a valid selector")
+                }
+                if (action.filePath.isEmpty()) {
+                    errors.add("Upload action must have a valid file path")
+                }
+            }
+            else -> {
+                // Other actions are generally valid
+            }
+        }
+    }
+    
+    private fun hasCircularDependencies(steps: List<ActionStep>): Boolean {
+        val graph = mutableMapOf<String, List<String>>()
+        steps.forEach { step ->
+            graph[step.id] = step.dependencies
+        }
+        
+        val visited = mutableSetOf<String>()
+        val recursionStack = mutableSetOf<String>()
+        
+        fun hasCycle(nodeId: String): Boolean {
+            if (nodeId in recursionStack) return true
+            if (nodeId in visited) return false
+            
+            visited.add(nodeId)
+            recursionStack.add(nodeId)
+            
+            graph[nodeId]?.forEach { dependency ->
+                if (hasCycle(dependency)) return true
+            }
+            
+            recursionStack.remove(nodeId)
+            return false
+        }
+        
+        return graph.keys.any { hasCycle(it) }
+    }
+    
+    private fun calculateSuccessRate(plan: TaskPlan, errors: List<String>, warnings: List<String>): Float {
+        if (errors.isNotEmpty()) return 0.0f
+        
+        var successRate = 1.0f
+        
+        // Reduce success rate based on warnings
+        successRate -= warnings.size * 0.1f
+        
+        // Reduce success rate based on complexity
+        successRate -= (plan.steps.size * 0.02f).coerceAtMost(0.3f)
+        
+        // Reduce success rate based on duration
+        if (plan.estimatedDuration > 60000) { // 1 minute
+            successRate -= 0.1f
+        }
+        
+        return successRate.coerceIn(0.0f, 1.0f)
+    }
+    
+    private fun adaptStep(step: ActionStep, newContext: WebContext): ActionStep {
+        val adaptedAction = adaptAction(step.action, newContext)
+        return step.copy(action = adaptedAction)
+    }
+    
+    private fun adaptAction(action: WebAction, context: WebContext): WebAction {
+        return when (action) {
+            is WebAction.Click -> {
+                // Try to find a better selector in the new context
+                val betterAction = context.availableActions.find { 
+                    it.type == ActionType.CLICK && it.confidence > 0.8f 
+                }
+                if (betterAction != null) {
+                    action.copy(selector = betterAction.selector)
+                } else {
+                    action
+                }
+            }
+            is WebAction.Type -> {
+                // Try to find a better form field in the new context
+                val betterField = context.formFields.find { 
+                    it.type != FormFieldType.HIDDEN && it.suggestedUserData != null 
+                }
+                if (betterField != null) {
+                    action.copy(selector = betterField.selector)
+                } else {
+                    action
+                }
+            }
+            else -> action
+        }
+    }
+    
+    private fun isConditionRelevant(condition: Condition, context: WebContext): Boolean {
+        return when (condition.type) {
+            ConditionType.ELEMENT_EXISTS -> {
+                condition.selector?.let { selector ->
+                    context.availableActions.any { it.selector == selector } ||
+                    context.formFields.any { it.selector == selector }
+                } ?: true
+            }
+            ConditionType.PAGE_LOADED -> true
+            ConditionType.URL_CONTAINS -> {
+                condition.expectedValue?.let { urlPart ->
+                    context.currentUrl?.contains(urlPart) ?: false
+                } ?: true
+            }
+            else -> true
+        }
+    }
+    
+    // Alternative plan generators
+    
+    private fun createManualFormFillingPlan(intent: TaskIntent, context: WebContext): TaskPlan {
+        val steps = context.formFields.mapIndexed { index, field ->
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Type(field.selector, field.suggestedUserData ?: ""),
+                order = index,
+                dependencies = emptyList(),
+                timeout = 8000L, // Longer timeout for manual approach
+                retryCount = 2
+            )
+        }
+        
+        return TaskPlan(
+            id = UUID.randomUUID().toString(),
+            steps = steps,
+            conditions = listOf(Condition(ConditionType.ELEMENT_EXISTS, "form", null)),
+            fallbacks = emptyList(),
+            estimatedDuration = steps.size * 8000L
+        )
+    }
+    
+    private fun createAutoDetectFormPlan(intent: TaskIntent, context: WebContext): TaskPlan {
+        val steps = listOf(
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.ExecuteScript("""
+                    // Auto-detect and fill form fields
+                    const forms = document.querySelectorAll('form');
+                    forms.forEach(form => {
+                        const inputs = form.querySelectorAll('input, select, textarea');
+                        inputs.forEach(input => {
+                            if (input.type === 'email') input.value = 'user@example.com';
+                            else if (input.type === 'tel') input.value = '+1-555-123-4567';
+                            else if (input.type === 'text' && input.name.includes('name')) input.value = 'John Doe';
+                        });
+                    });
+                """.trimIndent()),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 5000L
+            )
+        )
+        
+        return TaskPlan(
+            id = UUID.randomUUID().toString(),
+            steps = steps,
+            conditions = listOf(Condition(ConditionType.ELEMENT_EXISTS, "form", null)),
+            fallbacks = emptyList(),
+            estimatedDuration = 5000L
+        )
+    }
+    
+    private fun createDirectNavigationPlan(intent: TaskIntent, context: WebContext): TaskPlan {
+        val steps = listOf(
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Navigate(intent.target ?: "https://google.com"),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 10000L,
+                retryCount = 1
+            )
+        )
+        
+        return TaskPlan(
+            id = UUID.randomUUID().toString(),
+            steps = steps,
+            conditions = listOf(Condition(ConditionType.PAGE_LOADED, null, null)),
+            fallbacks = emptyList(),
+            estimatedDuration = 10000L
+        )
+    }
+    
+    private fun createSearchNavigationPlan(intent: TaskIntent, context: WebContext): TaskPlan {
+        val searchQuery = intent.parameters["query"] ?: "site navigation"
+        val steps = listOf(
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Navigate("https://google.com"),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 10000L
+            ),
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Type("input[name='q']", searchQuery),
+                order = 1,
+                dependencies = emptyList(),
+                timeout = 5000L
+            ),
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Click("button[type='submit']"),
+                order = 2,
+                dependencies = emptyList(),
+                timeout = 5000L
+            )
+        )
+        
+        return TaskPlan(
+            id = UUID.randomUUID().toString(),
+            steps = steps,
+            conditions = listOf(Condition(ConditionType.PAGE_LOADED, null, null)),
+            fallbacks = emptyList(),
+            estimatedDuration = 20000L
+        )
+    }
+    
+    private fun createPriceComparisonPlan(intent: TaskIntent, context: WebContext): TaskPlan {
+        val product = intent.parameters["product"] ?: "product"
+        val steps = listOf(
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.ExtractData(mapOf(
+                    "price" to ".price, .cost, .amount",
+                    "product" to ".product-name, h1"
+                )),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 10000L
+            )
+        )
+        
+        return TaskPlan(
+            id = UUID.randomUUID().toString(),
+            steps = steps,
+            conditions = listOf(Condition(ConditionType.PAGE_LOADED, null, null)),
+            fallbacks = emptyList(),
+            estimatedDuration = 10000L
+        )
+    }
+    
+    private fun createQuickPurchasePlan(intent: TaskIntent, context: WebContext): TaskPlan {
+        val steps = listOf(
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Click(".buy-now, .quick-buy, .one-click"),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 5000L,
+                retryCount = 2
+            )
+        )
+        
+        return TaskPlan(
+            id = UUID.randomUUID().toString(),
+            steps = steps,
+            conditions = listOf(Condition(ConditionType.ELEMENT_CLICKABLE, ".buy-now", null)),
+            fallbacks = emptyList(),
+            estimatedDuration = 5000L
+        )
+    }
+    
+    private fun createConservativeAlternative(intent: TaskIntent, context: WebContext): TaskPlan {
+        val steps = listOf(
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.Wait(Condition(ConditionType.PAGE_LOADED, null, null)),
+                order = 0,
+                dependencies = emptyList(),
+                timeout = 10000L
+            ),
+            ActionStep(
+                id = UUID.randomUUID().toString(),
+                action = WebAction.TakeScreenshot(fullPage = true),
+                order = 1,
+                dependencies = emptyList(),
+                timeout = 5000L
+            )
+        )
+        
+        return TaskPlan(
+            id = UUID.randomUUID().toString(),
+            steps = steps,
+            conditions = listOf(Condition(ConditionType.PAGE_LOADED, null, null)),
+            fallbacks = emptyList(),
+            estimatedDuration = 15000L
+        )
+    }
+}

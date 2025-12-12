@@ -1,0 +1,63 @@
+# Android Build Files
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Android Studio
+*.iml
+.idea/
+.gradle/
+build/
+app/build/
+
+# Portable Environment (Created by ULTIMATE_ONE_CLICK_SETUP.bat)
+portable-android-env/
+activate-env.bat
+
+# Local JDK Installation
+jdk-env/
+
+# Generated APK files
+*.apk
+*.aab
+
+# Gradle Wrapper (keep gradlew.bat but ignore gradle folder contents)
+.gradle/
+gradle/wrapper/gradle-wrapper.jar
+
+# Local configuration files
+local.properties
+
+# Log files
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# IDE files
+.vscode/
+*.swp
+*.swo
